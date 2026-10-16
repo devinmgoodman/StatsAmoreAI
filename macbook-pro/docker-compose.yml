@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # PostgreSQL 15 Database
+  # ============================================
+  db:
+    image: postgres:15-alpine
+    container_name: statsamoreai-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-statsamoreai}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # macOS-compatible volume mapping for data persistence
+      - postgres-data:/var/lib/postgresql/data
+      # Optional: init scripts for database setup
+      - ./docker/db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-statsamoreai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - app-network
+    labels:
+      com.docker.compose.restarts: "unless-stopped"
+      description: "PostgreSQL 15 Database"
+
+  # ============================================
+  # Backend API (Node.js/Express)
+  # ============================================
+  api:
+    build:
+      context: ./macbook-pro/backend
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: ${NODE_ENV:-development}
+    container_name: statsamoreai-api
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${API_PORT:-3000}
+      DB_HOST: db
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-statsamoreai}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      # Add your other env vars here
+      # JWT_SECRET: ${JWT_SECRET}
+      # AWS_REGION: ${AWS_REGION}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    volumes:
+      # Hot-reloading for development on macOS
+      - ./macbook-pro/backend:/app
+      - /app/node_modules
+      # Optional: logs persistence
+      - api-logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http = require('http'); const options = { hostname: 'localhost', port: 3000, path: '/health', timeout: 2000 }; const req = http.request(options, res => { res.on('data', () => {}); res.end(); }); req.on('error', err => { process.exit(1); }); req.end();"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - app-network
+    labels:
+      com.docker.compose.restarts: "unless-stopped"
+      description: "Node.js/Express Backend API"
+
+  # ============================================
+  # Frontend (React + TypeScript + Tailwind)
+  # ============================================
+  frontend:
+    build:
+      context: ./macbook-pro/frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: ${NODE_ENV:-development}
+    container_name: statsamoreai-frontend
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+      # Add your other frontend env vars here
+      # VITE_GA_ID: ${VITE_GA_ID}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      # Hot-reloading for development on macOS
+      - ./macbook-pro/frontend:/app
+      - /app/node_modules
+      - /app/dist
+    depends_on:
+      - api
+    networks:
+      - app-network
+    labels:
+      com.docker.compose.restarts: "unless-stopped"
+      description: "React + TypeScript + Tailwind CSS Frontend"
+
+# ============================================
+# Docker Networks (Isolation)
+# ============================================
+networks:
+  app-network:
+    driver: bridge
+    name: statsamoreai-network
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+    labels:
+      description: "Internal Docker network for service isolation"
+
+# ============================================
+# Docker Volumes (macOS Persistence)
+# ============================================
+volumes:
+  postgres-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${MACBOOK_PRO_POSTGRES_DATA:-./macbook-pro/data/postgres}
+    labels:
+      description: "PostgreSQL data persistence on macOS"
+
+  api-logs:
+    driver: local
+    labels:
+      description: "Backend API logs persistence"

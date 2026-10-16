@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project env files (keep .env.example)
+.env.dev
+.env.prod
