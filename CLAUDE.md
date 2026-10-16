@@ -12,19 +12,22 @@ Amateur hockey league site: stats entry + analytics.
 ## Environments
 | | Dev (MacBook Pro) | Prod (Mac Mini) |
 |---|---|---|
-| Run | `docker compose up` (hot reload, bind mounts) | `docker compose -f compose.yml -f compose.prod.yml up -d` |
+| Run | `docker compose up` (hot reload, bind mounts) | `docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d` |
 | DB | local Postgres container, seeded | Postgres container, named volume, nightly `pg_dump` |
 | Config | `.env.dev` (committed example: `.env.example`) | `.env.prod` on the Mac Mini only, never committed |
 
-- Prod is exposed publicly; the domain/site is on SiteGround. Frontend is served from the Mac Mini stack unless noted otherwise. SiteGround handles DNS/domain only; no app code runs on it.
-- TLS and public routing: reverse proxy container (Caddy) in prod.
+- Prod is public. `statsamore.com` is hosted on SiteGround and serves only the static frontend build (uploaded via rsync/SSH; Apache `.htaccess` SPA fallback). No Node/Postgres runs on SiteGround; SiteGround also keeps DNS.
+- The Mac Mini runs Postgres, the API, nightly backups and anything else that can't run on SiteGround. The API is public at `api.statsamore.com` (CNAME in SiteGround DNS -> DuckDNS name kept current by the `ddns` container; router forwards 80/443 to the Mini).
+- TLS and public routing: Caddy container in prod (`ops/caddy/Caddyfile`). Frontend and API are different origins on the same site: API sets `CORS_ORIGIN=https://statsamore.com`; frontend builds with `VITE_API_URL=https://api.statsamore.com`.
 
 ## Deploy
 - Repo: `~/Documents/Github/StatsAmoreAI` (local). Work on feature branches; PR into `main`.
 - GitHub Actions:
   - On PR: lint, typecheck, test, build images.
-  - On merge to `main`: deploy to Mac Mini via self-hosted runner (no inbound SSH exposure), run `docker compose pull/build`, run migrations, restart, health check, auto-rollback on failure.
-- Secrets live in GitHub Actions secrets / Mac Mini `.env.prod`. Never in the repo.
+  - On merge to `main`: (1) `ops/deploy.sh` on the Mac Mini self-hosted runner (no inbound SSH exposure): build, pre-deploy backup, migrations, restart, health check, auto-rollback on failure; then (2) build the frontend on a GitHub-hosted runner and rsync `dist/` to SiteGround.
+  - The self-hosted runner only ever runs `push`-to-`main` jobs, never PR code.
+- Secrets live in GitHub Actions secrets / Mac Mini `.env.prod` (kept outside the repo; `PROD_ENV_FILE` variable points to it). Never in the repo.
+- Backups: nightly `pg_dump` at 02:30 to `BACKUP_DIR` (14 dailies + 8 weeklies), copied off-site to Backblaze B2 via rclone.
 
 ## Repo layout
 ```
@@ -32,7 +35,8 @@ Amateur hockey league site: stats entry + analytics.
 /frontend     React app (src/pages, src/components, src/api)
 /packages/shared  shared TS types (optional)
 /.github/workflows
-compose.yml  compose.prod.yml  .env.example
+compose.yml  compose.prod.yml  .env.example  .env.prod.example
+/ops           deploy.sh, caddy/Caddyfile, backup/ (pg_dump job)
 ```
 
 ## Conventions
@@ -61,6 +65,4 @@ compose.yml  compose.prod.yml  .env.example
 - When a change affects dev/prod parity, Docker, or the workflow file, say so in one line.
 
 ## Open decisions (ask me before assuming)
-- Auth method (sessions vs JWT), user accounts for players?
-- Public domain/subdomain and whether the frontend and API share one origin.
-- Backup retention and where backups are stored.
+- Auth method (sessions vs JWT), user accounts for players? (Note: `statsamore.com` and `api.statsamore.com` are same-site, so SameSite=Lax session cookies + CORS credentials work.)
