@@ -14,13 +14,12 @@ WORKDIR /app
 
 # Install dependencies first (leverage Docker layer caching)
 COPY package.json package-lock.json ./
-RUN npm ci --only=production
+RUN npm ci
 
-# Copy source code
 COPY . .
 
-# Build the application (if you have a build step like tsc or bundling)
-RUN npm run build 2>/dev/null || true
+# Compile (fails the image build on error), then drop dev dependencies
+RUN npm run build && npm prune --omit=dev
 
 # ─── Production Stage ────────────────────────────────────────────────
 FROM node:20-alpine AS production
@@ -36,7 +35,6 @@ COPY --from=build /app/node_modules ./node_modules
 
 # Copy application source
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/src ./src
 
 ENV NODE_ENV=production
 ENV PORT=8080
@@ -46,5 +44,4 @@ EXPOSE 8080
 # Run as non-root user
 USER appuser
 
-# Health check endpoint (Express route: GET /api/v1/health)
 CMD ["node", "dist/server.js"]

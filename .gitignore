@@ -222,3 +222,7 @@ __marimo__/
 # Project env files (keep .env.example)
 .env.dev
 .env.prod
+
+# Node
+node_modules/
+.DS_Store
