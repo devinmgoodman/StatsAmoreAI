@@ -1,0 +1,98 @@
+# Prod overlay for the Mac Mini. Run from the repo root:
+#   docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d
+# (--env-file is needed so ${VAR} below resolves from .env.prod; ops/deploy.sh does this for you.)
+name: statsamore
+
+services:
+  postgres:
+    env_file: !override
+      - .env.prod
+    restart: always
+
+  backend:
+    image: statsamore/backend:${IMAGE_TAG:-local}
+    build:
+      context: ./backend
+      target: production
+    env_file: !override
+      - .env.prod
+    ports: !reset []
+    volumes: !reset [] # no bind mounts or dev node_modules volume in prod
+    restart: always
+
+  # The frontend is a static build on SiteGround; never start the dev container in prod.
+  frontend:
+    profiles: ["dev-only"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: stats-amore-caddy
+    restart: always
+    environment:
+      API_HOSTNAME: ${API_HOSTNAME:?set API_HOSTNAME in .env.prod}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.prod}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # certificates; losing this forces re-issuance
+      - caddy-config:/config
+    networks:
+      - frontend_net
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Keeps api.statsamore.com's DuckDNS target pointed at the current home IP.
+  ddns:
+    image: alpine:3.20
+    container_name: stats-amore-ddns
+    restart: always
+    environment:
+      DUCKDNS_SUBDOMAIN: ${DUCKDNS_SUBDOMAIN:?set DUCKDNS_SUBDOMAIN in .env.prod}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:?set DUCKDNS_TOKEN in .env.prod}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          r=$$(wget -qO- "https://www.duckdns.org/update?domains=$${DUCKDNS_SUBDOMAIN}&token=$${DUCKDNS_TOKEN}&ip=" || echo FAIL)
+          echo "$$(date -Iseconds) duckdns: $$r"
+          sleep 300
+        done
+    networks:
+      - egress_net
+
+  # Nightly pg_dump -> BACKUP_DIR (14 dailies, 8 weeklies) and optionally off-site via rclone.
+  backup:
+    build: ./ops/backup
+    image: statsamore/backup:${IMAGE_TAG:-local}
+    container_name: stats-amore-backup
+    restart: always
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+      BACKUP_TIME: ${BACKUP_TIME:-02:30}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      RCLONE_REMOTE: ${RCLONE_REMOTE:-}
+      RCLONE_CONFIG_B2_TYPE: ${RCLONE_CONFIG_B2_TYPE:-}
+      RCLONE_CONFIG_B2_ACCOUNT: ${RCLONE_CONFIG_B2_ACCOUNT:-}
+      RCLONE_CONFIG_B2_KEY: ${RCLONE_CONFIG_B2_KEY:-}
+    volumes:
+      # Must be an absolute path OUTSIDE the repo checkout (the CI runner cleans the checkout).
+      - ${BACKUP_DIR:?set BACKUP_DIR (absolute path outside the repo) in .env.prod}:/backups
+    networks:
+      - backend_net # reach postgres
+      - egress_net # reach the off-site bucket
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+networks:
+  egress_net:
+    driver: bridge
+
+volumes:
+  caddy-data:
+  caddy-config:
