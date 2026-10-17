@@ -54,6 +54,6 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SG_SSH_KEY" > ~/.ssh/sg_key && chmod 600 ~/.ssh/sg_key
           printf '%s\n' "$SG_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          rsync -rlptz --delete --exclude='.well-known' --exclude='cgi-bin' \
+          rsync -rlptz --delete --exclude='.well-known' --exclude='cgi-bin' --exclude='/legacy' \
             -e "ssh -i ~/.ssh/sg_key -p ${SG_PORT:-18765} -o StrictHostKeyChecking=yes" \
             frontend/dist/ "$SG_USER@$SG_HOST:$SG_WEB_ROOT/"
