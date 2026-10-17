@@ -226,3 +226,6 @@ __marimo__/
 # Node
 node_modules/
 .DS_Store
+
+# Local backup output
+backups/
